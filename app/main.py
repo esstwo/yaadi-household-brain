@@ -3,7 +3,7 @@ import os
 from datetime import datetime, timezone
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Form, Header, HTTPException, Response
+from fastapi import FastAPI, Header, HTTPException, Request, Response
 
 load_dotenv()
 
@@ -13,6 +13,8 @@ from .router import handle
 
 app = FastAPI(title="Yaadi")
 
+VALIDATE_SIGNATURE = os.environ.get("TWILIO_VALIDATE_SIGNATURE", "true").lower() == "true"
+
 
 @app.get("/health")
 def health():
@@ -21,10 +23,26 @@ def health():
 
 
 @app.post("/whatsapp")
-async def whatsapp_webhook(From: str = Form(...), Body: str = Form(...)):
+async def whatsapp_webhook(request: Request):
+    from twilio.request_validator import RequestValidator
     from twilio.twiml.messaging_response import MessagingResponse
 
-    phone = From.replace("whatsapp:", "")
+    form = await request.form()
+
+    if VALIDATE_SIGNATURE:
+        # Rebuild the URL Twilio signed. Behind ngrok / Render's proxy, request.url
+        # shows the internal scheme+host; the forwarded headers hold the public one.
+        proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+        host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+        url = f"{proto}://{host}{request.url.path}"
+        if request.url.query:
+            url += f"?{request.url.query}"
+        validator = RequestValidator(os.environ["TWILIO_AUTH_TOKEN"])
+        signature = request.headers.get("x-twilio-signature", "")
+        if not validator.validate(url, dict(form), signature):
+            raise HTTPException(403, "invalid twilio signature")
+
+    phone = form.get("From", "").replace("whatsapp:", "")
     user = db.get_user_by_phone(phone)
 
     if not user:
@@ -32,7 +50,9 @@ async def whatsapp_webhook(From: str = Form(...), Body: str = Form(...)):
     else:
         lists = [l["name"] for l in db.get_household_lists(user["household_id"])]
         now = datetime.now(timezone.utc).isoformat()
-        intent = parse_intent(Body, lists, now)
+        intent = parse_intent(
+            form.get("Body", ""), lists, now, last_list=user.get("last_list_name")
+        )
         reply = handle(user, intent)
 
     twiml = MessagingResponse()

@@ -29,9 +29,22 @@ def conn():
 # ── users / lists ──────────────────────────────────────────────────────────
 
 def get_user_by_phone(phone: str) -> dict | None:
-    """phone is E.164 without the 'whatsapp:' prefix."""
+    """phone is E.164 without the 'whatsapp:' prefix.
+    Result includes last_list_name (may be None) from a join on lists."""
     with conn() as c:
-        return c.execute("select * from users where phone = %s", (phone,)).fetchone()
+        return c.execute(
+            "select u.*, l.name as last_list_name"
+            " from users u left join lists l on l.id = u.last_list_id"
+            " where u.phone = %s",
+            (phone,),
+        ).fetchone()
+
+
+def set_user_last_list(user_id, list_id) -> None:
+    with conn() as c:
+        c.execute(
+            "update users set last_list_id = %s where id = %s", (list_id, user_id)
+        )
 
 
 def get_household_lists(household_id) -> list[dict]:
@@ -64,6 +77,44 @@ def get_open_items(list_id) -> list[dict]:
         return c.execute(
             "select text from items where list_id = %s and done = false", (list_id,)
         ).fetchall()
+
+
+def find_open_items_by_search(list_id, terms: list[str]) -> list[dict]:
+    """Case-insensitive substring match — one row per (item × term hit)
+    is fine since we dedupe by id downstream."""
+    if not terms:
+        return []
+    with conn() as c:
+        conditions = " OR ".join(["text ilike %s"] * len(terms))
+        params = [list_id, *(f"%{t}%" for t in terms)]
+        return c.execute(
+            f"select distinct id, text from items"
+            f" where list_id = %s and done = false and ({conditions})",
+            params,
+        ).fetchall()
+
+
+def mark_items_done(item_ids: list) -> None:
+    if not item_ids:
+        return
+    with conn() as c:
+        c.execute("update items set done = true where id = any(%s)", (item_ids,))
+
+
+def delete_items(item_ids: list) -> None:
+    if not item_ids:
+        return
+    with conn() as c:
+        c.execute("delete from items where id = any(%s)", (item_ids,))
+
+
+def clear_list(list_id) -> int:
+    """Delete all open items from a list. Returns rows removed."""
+    with conn() as c:
+        res = c.execute(
+            "delete from items where list_id = %s and done = false", (list_id,)
+        )
+        return res.rowcount
 
 
 # ── reminders ──────────────────────────────────────────────────────────────

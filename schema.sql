@@ -12,6 +12,7 @@ create table users (
   household_id uuid references households(id) on delete cascade,
   phone text unique not null,            -- E.164, e.g. +15105551234
   display_name text not null,
+  last_list_id uuid,                     -- last list this user interacted with
   google_refresh_token text,             -- Phase 3
   google_calendar_id text default 'primary',
   created_at timestamptz default now()
@@ -24,6 +25,10 @@ create table lists (
   created_at timestamptz default now(),
   unique (household_id, name)
 );
+
+-- FK added after both tables exist (users → lists cycle)
+alter table users add constraint users_last_list_id_fkey
+  foreign key (last_list_id) references lists(id) on delete set null;
 
 create table items (
   id uuid primary key default gen_random_uuid(),

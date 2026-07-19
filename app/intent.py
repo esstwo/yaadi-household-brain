@@ -2,7 +2,7 @@
 
 Returns a dict matching:
 {
-  "action":    "add" | "remove" | "list" | "complete" | "schedule" | "clarify",
+  "action":    "add" | "remove" | "list" | "complete" | "clear" | "schedule" | "clarify",
   "list_name": str | null,
   "items":     [str, ...],
   "when":      ISO-8601 datetime | null,
@@ -21,7 +21,7 @@ Return ONLY valid JSON, no prose, no code fences.
 
 Schema:
 {
-  "action": "add" | "remove" | "list" | "complete" | "schedule" | "clarify",
+  "action": "add" | "remove" | "list" | "complete" | "clear" | "schedule" | "clarify",
   "list_name": "<existing list, a new name, or null>",
   "items": ["..."],
   "when": "<ISO 8601 datetime or null>",
@@ -32,19 +32,31 @@ Schema:
 Rules:
 - If the user names a list that does not exist, set action="clarify" and ask in
   "reply" whether to create it.
-- For ambiguous targets ("add milk" with no list), set action="clarify".
+- If the user does not name a list AND a "Last active list" is provided in the
+  context, assume they mean that list. Only ask for clarification if no last
+  list exists.
+- "clear <list>" / "empty <list>" / "remove everything from <list>" → action="clear",
+  list_name set, items empty.
 - Resolve relative times ("tomorrow 6pm", "tuesday") using the provided current_time.
 - "remind us" → scope "us"; "remind me" → scope "me".
 - Keep "reply" short and friendly. Sentence case. No emoji unless natural.
 """
 
 
-def parse_intent(message: str, list_names: list[str], current_time_iso: str) -> dict:
-    context = (
-        f"Existing lists: {list_names}\n"
-        f"Current time: {current_time_iso}\n"
-        f"User said: {message}"
-    )
+def parse_intent(
+    message: str,
+    list_names: list[str],
+    current_time_iso: str,
+    last_list: str | None = None,
+) -> dict:
+    lines = [
+        f"Existing lists: {list_names}",
+        f"Current time: {current_time_iso}",
+    ]
+    if last_list:
+        lines.append(f"Last active list: {last_list}")
+    lines.append(f"User said: {message}")
+    context = "\n".join(lines)
     resp = client.messages.create(
         model=MODEL,
         max_tokens=400,
